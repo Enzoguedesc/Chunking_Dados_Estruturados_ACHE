@@ -1,0 +1,250 @@
+"""
+GERADOR DE CHUNKS COMPLETOS COM METADADOS — CATÁLOGO ACHÉ
+Compatível com Jupyter / Google Colab
+Inclui TODOS os campos do CSV: identificação, classificação, tributação e preços por ICMS/UF
+"""
+
+import csv
+import io
+import urllib.request
+
+URL_CSV       = "https://raw.githubusercontent.com/alvaroriz/datascience_datasets/refs/heads/main/Catalogo-Produtos.csv"
+ARQUIVO_SAIDA = "chunks_narrativos_ACHEv3.txt"
+
+FORMA_MAP = {
+    "COM": "comprimido", "COM REV": "comprimido revestido",
+    "COM MAST": "comprimido mastigável", "COM DISP": "comprimido dispersível",
+    "CAP": "cápsula", "FR": "frasco", "BG": "bisnaga", "XPE": "xarope",
+    "AER": "aerossol", "SOL": "solução", "CREM": "creme", "INJ": "injetável",
+    "FA": "frasco-ampola", "AMP": "ampola", "POM": "pomada",
+    "GTS": "gotas", "GT": "gotas", "DRG": "drágea", "ENV": "envelope",
+    "SUSOR": "suspensão oral", "LOC": "loção", "SPR": "spray", "GEL": "gel",
+}
+TARJA_MAP = {
+    "TV": "tarja vermelha", "VP": "tarja preta",
+    "VL": "sem tarja (venda livre)", "TP": "tarja preta"
+}
+LISTA_MAP  = {"POS": "lista positiva RENAME", "NEG": "lista negativa"}
+REGIME_MAP = {"MONITORADO": "regime monitorado", "LIBERADO": "regime liberado"}
+
+UF_ICMS = {
+    # Isenções (Conforme colunas do seu CSV)
+    "ICMS 0 % (PF)":               ("0%",    "Pessoa Física",    "isento"),
+    "ICMS 0 % (PMC)":              ("0%",    "PMC/Farmácia",     "isento"),
+
+    # Alíquota 12% (Note os espaços duplos '  ' e o espaço no final da PMC conforme seu CSV)
+    "ICMS 12 %  (PF)":             ("12%",   "Pessoa Física",    "Uso específico (SP, MG, PR, SC, RS)"),
+    "ICMS 12 % (PMC) ":            ("12%",   "PMC/Farmácia",     "Uso específico (SP, MG, PR, SC, RS)"),
+
+    # Alíquota 17% (Estados que mantêm a base ou estão em transição)
+    "ICMS 17 % (PF)":              ("17%",   "Pessoa Física",    "SC, RS, MS, MT"),
+    "ICMS 17 % (PMC)":             ("17%",   "PMC/Farmácia",     "SC, RS, MS, MT"),
+
+    # Alíquota 17,5% (BA saiu daqui e foi para 20%)
+    "ICMS 17,5 % (PF)":            ("17,5%", "Pessoa Física",    "CE, MA, PA, PI, RN"),
+    "ICMS 17,5 % (PMC)":           ("17,5%", "PMC/Farmácia",     "CE, MA, PA, PI, RN"),
+
+    # Alíquota 18% (Note o espaço duplo '  ' conforme seu CSV)
+    "ICMS 18 %  (PF)":             ("18%",   "Pessoa Física",    "SP, MG, ES"),
+    "ICMS 18 %  (PMC)":            ("18%",   "PMC/Farmácia",     "SP, MG, ES"),
+
+    # Alíquota 20% (Conforme solicitado: BA incluída aqui junto com DF)
+    "ICMS 20 % (PF)":              ("20%",   "Pessoa Física",    "BA, DF, GO, PB, PE, RJ, SE, TO, AL"),
+    "ICMS 20 % (PMC)":             ("20%",   "PMC/Farmácia",     "BA, DF, GO, PB, PE, RJ, SE, TO, AL"),
+
+    # Regimes Especiais (ALC) - Mantendo as chaves exatas da sua base
+    "ICMS 17 % (ALC) AC/RR (PF)":  ("17%",   "Pessoa Física",    "AC, RR (Área de Livre Comércio)"),
+    "ICMS 17 % (ALC) AC/RR (PMC)": ("17%",   "PMC/Farmácia",     "AC, RR (Área de Livre Comércio)"),
+    "ICMS 17,5 % (ALC) RO (PF)":   ("17,5%", "Pessoa Física",    "RO (Área de Livre Comércio)"),
+    "ICMS 17,5 % (ALC) RO (PMC)":  ("17,5%", "PMC/Farmácia",     "RO (Área de Livre Comércio)"),
+    "ICMS 18 % (ALC) AM/AP (PF)":  ("18%",   "Pessoa Física",    "AM, AP (Área de Livre Comércio)"),
+    "ICMS 18 % (ALC) AM/AP (PMC)": ("18%",   "PMC/Farmácia",     "AM, AP (Área de Livre Comércio)"),
+}
+
+# ── Leitura do CSV via URL ────────────────────────────────────────────────────
+print("Baixando CSV...")
+req = urllib.request.Request(URL_CSV, headers={"User-Agent": "Mozilla/5.0"})
+with urllib.request.urlopen(req) as resp:
+    conteudo = resp.read().decode("utf-8-sig")
+
+reader = csv.DictReader(io.StringIO(conteudo), delimiter=";")
+linhas = list(reader)
+print(f"{len(linhas)} produtos lidos.")
+
+def limpar_preco(valor):
+    """Normaliza vírgula para ponto e retorna string limpa."""
+    v = str(valor).strip().replace(",", ".")
+    try:
+        return f"R$ {float(v):.2f}"
+    except ValueError:
+        return "—"
+
+# ── Geração dos chunks ────────────────────────────────────────────────────────
+chunks = []
+for row in linhas:
+    codigo    = row.get("CÓDIGO SAP", "").strip()
+    if not codigo:
+        continue
+
+    familia   = row.get("FAMÍLIA", "").strip()
+    apresent  = row.get("APRESENTAÇÃO", "").strip()
+    qtde      = row.get("QTDE", "").strip()
+    um        = row.get("UM", "").strip()
+    principio = row.get("PRINCIPIO ATIVO", "").strip()
+    un_neg    = row.get("UNIDADE DE NEGÓCIO", "").strip()
+    empresa   = row.get("EMPRESA", "").strip()
+    tipo      = row.get("TIPO DE MEDICAMENTO", "").strip()
+    tarja_raw = row.get("TARJA", "").strip()
+    lista_raw = row.get("LISTA", "").strip()
+    regime    = row.get("REGIME DE PREÇOS", "").strip()
+    ean       = row.get("CÓDIGO EAN", "").strip()
+    reg_ms    = row.get("REGISTRO MS", "").strip()
+    ggrem     = row.get("GGREM", "").strip()
+    ncm       = row.get("NCM (CLASS FISCAL)", "").strip()
+    ipi       = row.get("IPI", "").strip()
+    pis       = row.get("% Pis", "").strip()
+    cofins    = row.get("% Cofins", "").strip()
+
+    forma  = FORMA_MAP.get(um, um)
+    tarja  = TARJA_MAP.get(tarja_raw, tarja_raw)
+    lista  = LISTA_MAP.get(lista_raw, lista_raw)
+    regime_ext = REGIME_MAP.get(regime, regime)
+
+    # ── Texto narrativo ───────────────────────────────────────────────────────
+    texto = (
+        f"O produto {apresent}, identificado pelo código SAP {codigo}, "
+        f"é um medicamento {tipo.lower()} fabricado pela {empresa}. "
+        f"Seu princípio ativo é o {principio.lower()}, "
+        f"apresentado na forma de {forma} com {qtde} unidades por embalagem. "
+        f"Pertence ao segmento de {un_neg.lower()}, "
+        f"com {tarja}, {lista} e {regime_ext}."
+    )
+
+    # ── Bloco de preços por ICMS ──────────────────────────────────────────────
+    precos_linhas = []
+    for col, (aliq, tipo_cliente, ufs) in UF_ICMS.items():
+        val = limpar_preco(row.get(col, ""))
+        precos_linhas.append(
+            f"    ICMS {aliq:>5} | {tipo_cliente:<15} | UF: {ufs:<45} | Preço: {val}"
+        )
+
+    chunks.append({
+        "codigo":         codigo,
+        "familia":        familia,
+        "apresentacao":   apresent,
+        "qtde":           qtde,
+        "unidade":        um,
+        "forma":          forma,
+        "principio":      principio,
+        "un_neg":         un_neg,
+        "empresa":        empresa,
+        "tipo":           tipo,
+        "tarja_raw":      tarja_raw,
+        "tarja":          tarja,
+        "lista_raw":      lista_raw,
+        "lista":          lista,
+        "regime":         regime,
+        "ean":            ean,
+        "reg_ms":         reg_ms,
+        "ggrem":          ggrem,
+        "ncm":            ncm,
+        "ipi":            ipi,
+        "pis":            pis,
+        "cofins":         cofins,
+        "texto":          texto,
+        "precos":         precos_linhas,
+    })
+
+print(f"{len(chunks)} chunks gerados.")
+
+# ── Montagem do arquivo ───────────────────────────────────────────────────────
+SEP  = "=" * 80
+SEP2 = "-" * 80
+
+cabecalho = "\n".join([
+    SEP,
+    "CATÁLOGO ACHÉ — CHUNKS COMPLETOS COM METADADOS E PREÇOS (ABORDAGEM HÍBRIDA)",
+    f"Total de produtos: {len(chunks)}",
+    SEP,
+    "",
+    "ESTRUTURA DE CADA CHUNK:",
+    "  [1] IDENTIFICAÇÃO  — código SAP, EAN, família, apresentação",
+    "  [2] COMPOSIÇÃO     — princípio ativo, forma farmacêutica, quantidade",
+    "  [3] CLASSIFICAÇÃO  — tipo, tarja, lista, regime, unidade de negócio, empresa",
+    "  [4] TRIBUTAÇÃO     — IPI, PIS, COFINS, NCM, Registro MS, GGREM",
+    "  [5] PREÇOS POR UF  — todas as alíquotas ICMS para PF e PMC/Farmácia",
+    "  [6] TEXTO          — descrição narrativa para busca semântica",
+    "",
+    "COMO IDENTIFICAR PRODUTOS:",
+    "  - Por nome / apresentação : campo 'apresentacao' ou TEXTO",
+    "  - Por código SAP          : campo 'codigo_sap'",
+    "  - Por princípio ativo     : campo 'principio_ativo' ou TEXTO",
+    "  - Por código EAN          : campo 'codigo_ean'",
+    "",
+    "COMO SELECIONAR O PREÇO CORRETO:",
+    "  1. Identifique a UF do cliente",
+    "  2. Identifique o tipo: Pessoa Física (PF) ou Farmácia/Revenda (PMC)",
+    "  3. Localize a linha de preço correspondente na seção PREÇOS POR UF",
+    "",
+    SEP,
+    "",
+])
+
+blocos = ""
+for c in chunks:
+    b  = f"{SEP2}\n"
+    b += f"CHUNK ID : CHK-{c['codigo']}\n"
+    b += f"\n"
+
+    b += f"[1] IDENTIFICAÇÃO\n"
+    b += f"  codigo_sap   : {c['codigo']}\n"
+    b += f"  codigo_ean   : {c['ean']}\n"
+    b += f"  familia      : {c['familia']}\n"
+    b += f"  apresentacao : {c['apresentacao']}\n"
+    b += f"\n"
+
+    b += f"[2] COMPOSIÇÃO\n"
+    b += f"  principio_ativo    : {c['principio']}\n"
+    b += f"  forma_farmaceutica : {c['forma']}\n"
+    b += f"  unidade_abrev      : {c['unidade']}\n"
+    b += f"  quantidade         : {c['qtde']} {c['unidade']}\n"
+    b += f"\n"
+
+    b += f"[3] CLASSIFICAÇÃO\n"
+    b += f"  tipo_medicamento : {c['tipo']}\n"
+    b += f"  tarja            : {c['tarja_raw']} ({c['tarja']})\n"
+    b += f"  lista            : {c['lista_raw']} ({c['lista']})\n"
+    b += f"  regime_precos    : {c['regime']}\n"
+    b += f"  unidade_negocio  : {c['un_neg']}\n"
+    b += f"  empresa          : {c['empresa']}\n"
+    b += f"\n"
+
+    b += f"[4] TRIBUTAÇÃO\n"
+    b += f"  registro_ms : {c['reg_ms']}\n"
+    b += f"  ggrem       : {c['ggrem']}\n"
+    b += f"  ncm         : {c['ncm']}\n"
+    b += f"  ipi         : {c['ipi']}%\n"
+    b += f"  pis         : {c['pis']}%\n"
+    b += f"  cofins      : {c['cofins']}%\n"
+    b += f"\n"
+
+    b += f"[5] PREÇOS POR UF E TIPO DE CLIENTE\n"
+    for linha in c['precos']:
+        b += f"{linha}\n"
+    b += f"\n"
+
+    b += f"[6] TEXTO NARRATIVO\n"
+    b += f"  {c['texto']}\n"
+    b += f"\n"
+
+    blocos += b
+
+saida = cabecalho + blocos
+
+with open(ARQUIVO_SAIDA, "w", encoding="utf-8") as f:
+    f.write(saida)
+
+print(f"Arquivo salvo : {ARQUIVO_SAIDA}")
+print(f"Tamanho       : {len(saida):,} caracteres")
+print(f"Chunks gerados: {len(chunks)}")
+print(f"\nAnexe '{ARQUIVO_SAIDA}' no Gem do Gemini.")
