@@ -1,0 +1,611 @@
+{
+  "name": "Fluxo Final - LLM ACHE",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# Teste\n\nOlá, gostaria de receber um orçamento dos seguintes produtos:\n\n10x ACICLOVIR 200MG COM BLX25\n10x ALENIA 12/400MCG POINAL CAP FRX60+INAL\n10x BIOMAG 15MG CAP BLX30 (B2)\n\nAt.te,\nJosé Pedidor por nome\nJoseFarmacia - Rio de Janeiro - RJ\n",
+        "height": 272,
+        "width": 448
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1696,
+        208
+      ],
+      "typeVersion": 1,
+      "id": "3da46bfc-cb73-45b4-acad-8fdbd6c9bdf5",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "jsCode": "const form = $('Extrair Dados1').first().json;\nreturn [{ json: form }];"
+      },
+      "id": "92d18203-e189-4a65-944d-bc1b9c6c4fca",
+      "name": "Recuperar Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2576,
+        368
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "query": "=={{ `Pedido de orçamento:\\n${$json.pedido}\\n\\nCliente: ${$json.nome} | ${$json.tipo_cliente} (${$json.tipo_preco}) | UF: ${$json.uf} | ${$json.icms_regra}` }}",
+        "options": {
+          "systemPromptTemplate": "Você é um assistente de orçamento da ACHÉ Laboratórios Farmacêuticos.\n\nCatálogo de produtos recuperado:\n{context}\n\nAnalise o catálogo acima e retorne EXCLUSIVAMENTE um JSON válido sem nenhum texto antes ou depois.\n\nO JSON deve ter esta estrutura:\n- itens: array com cada produto encontrado contendo produto, codigo_sap, chunk_id, principio_ativo, quantidade, preco_unitario, preco_total, icms_aplicado, tipo_preco, observacao\n- cliente: objeto com nome, tipo, uf, icms_regra  \n- total: soma de todos os preco_total\n- alertas: array de avisos\n\nREGRAS OBRIGATÓRIAS:\n- Use SOMENTE preços da seção PRECOS do catálogo acima\n- Nunca invente valores\n- Se produto duplicado prefira versão ACHÉ\n- Retorne apenas JSON puro sem texto adicional"
+        }
+      },
+      "id": "e9ee1826-5c83-4c87-b473-e2f6818be3e2",
+      "name": "QA Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainRetrievalQa",
+      "typeVersion": 1,
+      "position": [
+        2896,
+        544
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "model": "meta-llama/llama-3.1-8b-instruct",
+        "options": {}
+      },
+      "id": "33086daa-17c5-4a59-946a-7da16ce7b454",
+      "name": "LLM - OpenRouter",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        2816,
+        704
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "zRgzJRdmrXWRBHDG",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst nome         = d['Nome do Cliente'] || '';\nconst tipo_cliente = d['Tipo de Cliente'] || '';\nconst uf           = d['UF'] || '';\nconst pedido       = d['Pedido'] || '';\nconst tipo_preco   = tipo_cliente.includes('Física') ? 'PF' : 'PMC';\nconst icms = {'SP':'18%','MG':'18%','ES':'18%','PR':'12%','SC':'17%','RS':'17%','MS':'17%','MT':'17%','CE':'17,5%','MA':'17,5%','PA':'17,5%','PI':'17,5%','RN':'17,5%','RJ':'20%','BA':'20%','DF':'20%','GO':'20%','PB':'20%','PE':'20%','SE':'20%','TO':'20%','AL':'20%','AM':'18%','AP':'18%','AC':'17%','RR':'17%','RO':'17,5%'};\nconst icms_aliq = icms[uf] || '17%';\nconst icms_regra = `ICMS ${icms_aliq} ${tipo_preco} — ${uf}`;\nconst query_busca = `${pedido} ${tipo_preco} UF ${uf} ICMS ${icms_aliq}`;\n\nconst system_prompt = `Você é um assistente especializado em orçamento de medicamentos da ACHÉ Laboratórios Farmacêuticos.\n\nAo receber uma solicitação de orçamento, siga obrigatoriamente estas etapas:\n\nETAPA 1 — EXTRAÇÃO DE ENTIDADES: Identifique produtos (por nome, código SAP ou princípio ativo), quantidades, tipo de cliente (${tipo_preco}) e UF (${uf}).\n\nETAPA 2 — IDENTIFICAÇÃO NO CATÁLOGO: Para cada produto, localize o bloco correspondente nos chunks pelo campo apresentacao, codigo_sap ou principio_ativo.\n\nETAPA 3 — SELEÇÃO DO PREÇO: Use a seção [5] PRECOS do chunk. Selecione a linha com alíquota ${icms_aliq} para ${tipo_preco}.\n\nETAPA 4 — CÁLCULO: preco_total = preco_unitario × quantidade. total = soma de todos.\n\nETAPA 5 — RETORNE APENAS JSON VÁLIDO SEM TEXTO ANTES OU DEPOIS:\n{\n  \"itens\": [{\n    \"produto\": \"nome completo\",\n    \"codigo_sap\": \"código SAP\",\n    \"chunk_id\": \"CHK-XXXXXXX\",\n    \"principio_ativo\": \"substância\",\n    \"quantidade\": 0,\n    \"preco_unitario\": 0.00,\n    \"preco_total\": 0.00,\n    \"icms_aplicado\": \"${icms_aliq}\",\n    \"tipo_preco\": \"${tipo_preco}\",\n    \"observacao\": \"\"\n  }],\n  \"cliente\": { \"nome\": \"${nome}\", \"tipo\": \"${tipo_cliente}\", \"uf\": \"${uf}\", \"icms_regra\": \"${icms_regra}\" },\n  \"total\": 0.00,\n  \"alertas\": []\n}\n\nREGRAS OBRIGATÓRIAS:\n\n  - Nunca invente preços. Use SOMENTE os valores da seção [5] do catálogo.\n\n  - Nunca omita campos do JSON, mesmo que o valor seja zero ou vazio.\n\n  - Se um produto aparecer duplicado no catálogo (mesma apresentação, empresas\n\n    diferentes), escolha a versão ACHÉ e informe em observacao.\n\n  - Se a quantidade não for informada, assuma 1 e sinalize em alertas.\n\n  - O JSON deve ser válido — sem comentários, sem trailing commas.\n\n  - Adicione um campo de alerta para sinalizar se existe mais de um mesmo produto, só que de empresas diferentes`\n\nreturn [{ json: { nome, tipo_cliente, uf, tipo_preco, icms_aliq, icms_regra, pedido, query_busca, system_prompt } }];"
+      },
+      "id": "3ab80dad-7e2f-4f11-9644-28ccdb25563e",
+      "name": "Extrair Dados1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/alvaroriz/datascience_datasets/refs/heads/main/Catalogo-Produtos.csv",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "d187409f-972d-492e-9245-1b8c7941ee3d",
+      "name": "Baixar CSV1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1840,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nlet csv = '';\nif (typeof item.json.data === 'string') csv = item.json.data;\nelse for (const k of Object.keys(item.json)) { if (typeof item.json[k] === 'string' && item.json[k].length > 100) { csv = item.json[k]; break; } }\ncsv = csv.replace(/^\\uFEFF/, '');\n\nconst FORMA = {'COM':'comprimido','COM REV':'comprimido revestido','COM MAST':'comprimido mastigável','CAP':'cápsula','FR':'frasco','BG':'bisnaga','XPE':'xarope','AER':'aerossol','SOL':'solução','CREM':'creme','INJ':'injetável','FA':'frasco-ampola','AMP':'ampola','POM':'pomada','GTS':'gotas','GT':'gotas','DRG':'drágea','ENV':'envelope','SUSOR':'suspensão oral','LOC':'loção','SPR':'spray','GEL':'gel'};\nconst TARJA = {'TV':'tarja vermelha','VP':'tarja preta','VL':'sem tarja (venda livre)','TP':'tarja preta'};\nconst LISTA = {'POS':'lista positiva RENAME','NEG':'lista negativa'};\nconst REGIME = {'MONITORADO':'regime monitorado','LIBERADO':'regime liberado'};\nconst UF_ICMS = [\n  {col:'ICMS 0 % (PF)',aliq:'0%',tc:'Pessoa Física',ufs:'isento'},\n  {col:'ICMS 0 % (PMC)',aliq:'0%',tc:'PMC/Farmácia',ufs:'isento'},\n  {col:'ICMS 12 %  (PF)',aliq:'12%',tc:'Pessoa Física',ufs:'SP, MG, PR, SC, RS'},\n  {col:'ICMS 12 % (PMC) ',aliq:'12%',tc:'PMC/Farmácia',ufs:'SP, MG, PR, SC, RS'},\n  {col:'ICMS 17 % (PF)',aliq:'17%',tc:'Pessoa Física',ufs:'SC, RS, MS, MT'},\n  {col:'ICMS 17 % (PMC)',aliq:'17%',tc:'PMC/Farmácia',ufs:'SC, RS, MS, MT'},\n  {col:'ICMS 17,5 % (PF)',aliq:'17,5%',tc:'Pessoa Física',ufs:'CE, MA, PA, PI, RN'},\n  {col:'ICMS 17,5 % (PMC)',aliq:'17,5%',tc:'PMC/Farmácia',ufs:'CE, MA, PA, PI, RN'},\n  {col:'ICMS 18 %  (PF)',aliq:'18%',tc:'Pessoa Física',ufs:'SP, MG, ES'},\n  {col:'ICMS 18 %  (PMC)',aliq:'18%',tc:'PMC/Farmácia',ufs:'SP, MG, ES'},\n  {col:'ICMS 20 % (PF)',aliq:'20%',tc:'Pessoa Física',ufs:'BA, DF, GO, PB, PE, RJ, SE, TO, AL'},\n  {col:'ICMS 20 % (PMC)',aliq:'20%',tc:'PMC/Farmácia',ufs:'BA, DF, GO, PB, PE, RJ, SE, TO, AL'},\n  {col:'ICMS 17 % (ALC) AC/RR (PF)',aliq:'17%',tc:'Pessoa Física',ufs:'AC, RR (ALC)'},\n  {col:'ICMS 17 % (ALC) AC/RR (PMC)',aliq:'17%',tc:'PMC/Farmácia',ufs:'AC, RR (ALC)'},\n  {col:'ICMS 17,5 % (ALC) RO (PF)',aliq:'17,5%',tc:'Pessoa Física',ufs:'RO (ALC)'},\n  {col:'ICMS 17,5 % (ALC) RO (PMC)',aliq:'17,5%',tc:'PMC/Farmácia',ufs:'RO (ALC)'},\n  {col:'ICMS 18 % (ALC) AM/AP (PF)',aliq:'18%',tc:'Pessoa Física',ufs:'AM, AP (ALC)'},\n  {col:'ICMS 18 % (ALC) AM/AP (PMC)',aliq:'18%',tc:'PMC/Farmácia',ufs:'AM, AP (ALC)'}\n];\n\nfunction parseCSV(t) {\n  const linhas = t.replace(/\\r\\n/g,'\\n').replace(/\\r/g,'\\n').split('\\n');\n  const cab = linhas[0].split(';').map(c=>c.trim().replace(/^\\uFEFF/,''));\n  return linhas.slice(1).filter(l=>l.trim()).map(l=>{ const v=l.split(';'); const o={}; cab.forEach((c,i)=>{o[c]=(v[i]||'').trim();}); return o; });\n}\nfunction limpar(v) { const n=parseFloat((v||'').toString().trim().replace(',','.')); return isNaN(n)?'—':`R$ ${n.toFixed(2)}`; }\n\nconst rows = parseCSV(csv);\nconst chunks = [];\nfor (const row of rows) {\n  const codigo = (row['CÓDIGO SAP']||'').trim(); if (!codigo) continue;\n  const familia=(row['FAMÍLIA']||'').trim(), apresent=(row['APRESENTAÇÃO']||'').trim(), qtde=(row['QTDE']||'').trim(), um=(row['UM']||'').trim();\n  const principio=(row['PRINCIPIO ATIVO']||'').trim(), un_neg=(row['UNIDADE DE NEGÓCIO']||'').trim(), empresa=(row['EMPRESA']||'').trim(), tipo=(row['TIPO DE MEDICAMENTO']||'').trim();\n  const tarja_raw=(row['TARJA']||'').trim(), lista_raw=(row['LISTA']||'').trim(), regime=(row['REGIME DE PREÇOS']||'').trim();\n  const ean=(row['CÓDIGO EAN']||'').trim(), reg_ms=(row['REGISTRO MS']||'').trim(), ggrem=(row['GGREM']||'').trim(), ncm=(row['NCM (CLASS FISCAL)']||'').trim(), ipi=(row['IPI']||'').trim(), pis=(row['% Pis']||'').trim(), cofins=(row['% Cofins']||'').trim();\n  const forma=FORMA[um]||um, tarja=TARJA[tarja_raw]||tarja_raw, lista=LISTA[lista_raw]||lista_raw, regime_ext=REGIME[regime]||regime;\n  const texto = `O produto ${apresent}, código SAP ${codigo}, é um medicamento ${tipo.toLowerCase()} fabricado pela ${empresa}. Princípio ativo: ${principio.toLowerCase()}, na forma de ${forma} com ${qtde} unidades. Segmento: ${un_neg.toLowerCase()}, ${tarja}, ${lista}, ${regime_ext}.`;\n  const precos = UF_ICMS.map(({col,aliq,tc,ufs})=>`ICMS ${aliq} | ${tc} | ${ufs} | ${limpar(row[col])}`).join(' || ');\n  const bloco = `--- CHK-${codigo} ---\\n[1] codigo_sap: ${codigo} | ean: ${ean} | familia: ${familia} | apresentacao: ${apresent}\\n[2] principio_ativo: ${principio} | forma: ${forma} | unidade: ${um} | qtde: ${qtde}\\n[3] tipo: ${tipo} | tarja: ${tarja_raw} | lista: ${lista_raw} | regime: ${regime} | empresa: ${empresa} | segmento: ${un_neg}\\n[4] ncm: ${ncm} | ipi: ${ipi}% | pis: ${pis}% | cofins: ${cofins}%\\n[5] PRECOS: ${precos}\\n[6] TEXTO: ${texto}`;\n  chunks.push({ json: { pageContent: `${texto} | Família: ${familia} | Apresentação: ${apresent} | Princípio ativo: ${principio} | Código SAP: ${codigo} | Tipo: ${tipo} | Empresa: ${empresa}`, metadata: { chunk_id:`CHK-${codigo}`, codigo_sap:codigo, familia, apresentacao:apresent, principio_ativo:principio, tipo, empresa, tarja:tarja_raw, regime, un_neg, bloco_completo:bloco, precos_raw:precos } } });\n}\nconsole.log(`Chunks: ${chunks.length}`);\nreturn chunks;"
+      },
+      "id": "d03bd163-e51c-4f82-8b0a-e448e83671e2",
+      "name": "Gerar Chunks1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        560
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Garante que conteudo seja sempre string\nlet conteudo = input.response || input.text || input.output || '';\nconteudo = typeof conteudo === 'string' ? conteudo : JSON.stringify(conteudo);\n\n// Limpa e extrai o JSON\nconst limpo = conteudo\n  .replace(/```json/gi, '')\n  .replace(/```/g, '')\n  .replace(/\\\\n/g, ' ')\n  .replace(/\\n/g, ' ')\n  .trim();\n\nlet orcamento = {};\ntry {\n  orcamento = JSON.parse(limpo);\n} catch(e) {\n  const match = limpo.match(/\\{[\\s\\S]*\\}/);\n  if (match) {\n    try {\n      orcamento = JSON.parse(match[0]);\n    } catch(e2) {\n      orcamento = { erro: 'JSON inválido', resposta_raw: conteudo };\n    }\n  } else {\n    orcamento = { erro: 'JSON inválido', resposta_raw: conteudo };\n  }\n}\n\nreturn [{ json: { orcamento } }];"
+      },
+      "id": "98722f86-f7ff-49d5-a94c-393c1a57a3ab",
+      "name": "Parsear JSON1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3264,
+        544
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "let { orcamento } = $input.first().json;\n\n// Se orcamento ainda for string, parseia agora\nif (typeof orcamento === 'string' || orcamento.text) {\n  const raw = typeof orcamento === 'string' ? orcamento : (orcamento.text || '');\n  try {\n    const limpo = raw.replace(/```json/gi,'').replace(/```/g,'').replace(/\\\\n/g,' ').trim();\n    orcamento = JSON.parse(limpo);\n  } catch(e) {\n    const match = raw.match(/\\{[\\s\\S]*\\}/);\n    if (match) {\n      try { orcamento = JSON.parse(match[0]); }\n      catch(e2) { orcamento = { erro: 'JSON inválido', resposta_raw: raw }; }\n    } else {\n      orcamento = { erro: 'JSON inválido', resposta_raw: raw };\n    }\n  }\n}\nif (orcamento.erro) return [{ json: { html: `<div style='padding:32px;font-family:Arial'><h2 style='color:#c0392b'>Erro ao processar</h2><p>${orcamento.erro}</p><pre style='background:#f9f9f9;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto'>${String(orcamento.resposta_raw||'').replace(/</g,'&lt;')}</pre></div>` } }];\n\nconst itens=orcamento.itens||[], cliente=orcamento.cliente||{}, alertas=orcamento.alertas||[], total=Number(orcamento.total||0).toFixed(2);\nconst rows = itens.map((it,i)=>{ const c=i%2===0?'#F8FBFF':'#FFF'; const obs=it.observacao?`<br><small style='color:#e67e22'>${it.observacao}</small>`:''; return `<tr style='background:${c}'><td>${it.produto||''}${obs}</td><td style='text-align:center;font-family:monospace'>${it.codigo_sap||''}</td><td style='text-align:center'>${it.quantidade||''}</td><td style='text-align:right'>R$ ${Number(it.preco_unitario||0).toFixed(2)}</td><td style='text-align:right;font-weight:bold'>R$ ${Number(it.preco_total||0).toFixed(2)}</td><td style='text-align:center'><span style='background:#e8f0fe;color:#1E4D8C;padding:2px 8px;border-radius:10px;font-size:12px'>${it.icms_aplicado||''} ${it.tipo_preco||''}</span></td></tr>`; }).join('');\nconst alertasHtml=alertas.length?`<div style='background:#fff8e1;border-left:4px solid #f39c12;padding:12px 16px;margin-top:16px;border-radius:4px'><strong>⚠️ Alertas:</strong><ul style='margin:6px 0 0;padding-left:18px'>${alertas.map(a=>`<li>${a}</li>`).join('')}</ul></div>`:'';\nconst html=`<!DOCTYPE html><html lang='pt-BR'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Orçamento ACHÉ</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#f0f4f8;padding:24px 16px}.card{background:#fff;border-radius:12px;padding:28px;max-width:1000px;margin:0 auto;box-shadow:0 4px 20px rgba(0,0,0,.08)}.header{display:flex;align-items:center;gap:12px;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #e8f0fe}.header h1{color:#1E4D8C;font-size:20px}.badge{background:#e8f0fe;color:#1E4D8C;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:bold}.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px}.box{background:#f8fbff;border:1px solid #e0eaff;border-radius:8px;padding:12px}.box label{font-size:11px;color:#888;display:block;margin-bottom:3px;text-transform:uppercase}.box span{font-weight:bold;color:#1E4D8C;font-size:14px}table{width:100%;border-collapse:collapse;font-size:13px}thead th{background:#1E4D8C;color:#fff;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase}tbody td{padding:9px 12px;border-bottom:1px solid #f0f0f0}.total td{background:#e8f0fe;font-size:14px;padding:12px;border-top:2px solid #1E4D8C}.footer{margin-top:20px;text-align:center;color:#aaa;font-size:11px}</style></head><body><div class='card'><div class='header'><div style='flex:1'><h1>🧾 Orçamento ACHÉ Laboratórios</h1><p style='color:#666;font-size:12px;margin-top:3px'>Gerado via RAG + Chunking Semântico Híbrido + Qdrant</p></div><span class='badge'>RAG + QA Chain</span></div><div class='info'><div class='box'><label>Cliente</label><span>${cliente.nome||''}</span></div><div class='box'><label>Tipo</label><span>${cliente.tipo||''}</span></div><div class='box'><label>UF</label><span>${cliente.uf||''}</span></div><div class='box'><label>ICMS</label><span>${cliente.icms_regra||''}</span></div></div><table><thead><tr><th>Produto</th><th style='text-align:center'>Cód. SAP</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Preço Unit.</th><th style='text-align:right'>Total</th><th style='text-align:center'>ICMS</th></tr></thead><tbody>${rows}<tr class='total'><td colspan='4'><strong>TOTAL GERAL</strong></td><td style='text-align:right'><strong>R$ ${total}</strong></td><td></td></tr></tbody></table>${alertasHtml}<div class='footer'>Extração e Preparação de Dados — Chunking Semântico Híbrido — ACHÉ · 2025</div></div></body></html>`;\nreturn [{ json: { html } }];"
+      },
+      "id": "9fd346d7-f461-4916-999a-f648aca2ca95",
+      "name": "Montar HTML1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3472,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "path": "2b26c85d-8d02-4a59-a62c-5b4ec1d1127d",
+        "formTitle": "🧬 Orçamento ACHÉ",
+        "formDescription": "Preencha os dados abaixo para gerar seu orçamento de medicamentos.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Nome do Cliente",
+              "placeholder": "Ex: João Silva / JoseFarmacia Ltda",
+              "defaultValue": "Enzo Guedes",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Tipo de Cliente",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Pessoa Física (PF)"
+                  },
+                  {
+                    "option": "Pessoa Jurídica / Farmácia (PMC)"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "UF",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "AC"
+                  },
+                  {
+                    "option": "AL"
+                  },
+                  {
+                    "option": "AM"
+                  },
+                  {
+                    "option": "AP"
+                  },
+                  {
+                    "option": "BA"
+                  },
+                  {
+                    "option": "CE"
+                  },
+                  {
+                    "option": "DF"
+                  },
+                  {
+                    "option": "ES"
+                  },
+                  {
+                    "option": "GO"
+                  },
+                  {
+                    "option": "MA"
+                  },
+                  {
+                    "option": "MG"
+                  },
+                  {
+                    "option": "MS"
+                  },
+                  {
+                    "option": "MT"
+                  },
+                  {
+                    "option": "PA"
+                  },
+                  {
+                    "option": "PB"
+                  },
+                  {
+                    "option": "PE"
+                  },
+                  {
+                    "option": "PI"
+                  },
+                  {
+                    "option": "PR"
+                  },
+                  {
+                    "option": "RJ"
+                  },
+                  {
+                    "option": "RN"
+                  },
+                  {
+                    "option": "RO"
+                  },
+                  {
+                    "option": "RR"
+                  },
+                  {
+                    "option": "RS"
+                  },
+                  {
+                    "option": "SC"
+                  },
+                  {
+                    "option": "SE"
+                  },
+                  {
+                    "option": "SP"
+                  },
+                  {
+                    "option": "TO"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Pedido",
+              "fieldType": "textarea",
+              "placeholder": "Ex:\n10x ACICLOVIR 200MG COM BLX25\n5x 1006368\n20x RACECADOTRILA",
+              "defaultValue": "Olá, gostaria de receber um orçamento dos seguintes produtos:  10x ACICLOVIR 200MG COM BLX25 10x ALENIA 12/400MCG POINAL CAP FRX60+INAL 10x BIOMAG 15MG CAP BLX30 (B2)",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bd110d19-0133-41ab-a8b4-dc73dcb57990",
+      "name": "Formulário de Pedido2",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        560
+      ],
+      "webhookId": "2b26c85d-8d02-4a59-a62c-5b4ec1d1127d"
+    },
+    {
+      "parameters": {},
+      "id": "61603e72-fd10-4284-9865-0ddfd9b50452",
+      "name": "Gemini Embed - Buscar1",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2912,
+        1072
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "4Vz28jsqf2xT8uDi",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "topK": 8
+      },
+      "type": "@n8n/n8n-nodes-langchain.retrieverVectorStore",
+      "typeVersion": 1,
+      "position": [
+        2992,
+        752
+      ],
+      "id": "78bf2fcf-96eb-4eae-b8be-26217b2a4510",
+      "name": "Vector Store Retriever",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "ache_rag",
+          "mode": "list",
+          "cachedResultName": "ache_rag"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [
+        2912,
+        912
+      ],
+      "id": "889df51a-ffa2-4f26-b5e3-43128b5b1762",
+      "name": "Qdrant Vector Store",
+      "credentials": {
+        "qdrantApi": {
+          "id": "asWB4et9e8kS3uk4",
+          "name": "Qdrant account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "html": "{{ $json.html }}"
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        3680,
+        544
+      ],
+      "id": "87ac477a-8532-4753-9e48-4be379504257",
+      "name": "HTML"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "ache_rag",
+          "mode": "list",
+          "cachedResultName": "ache_rag"
+        },
+        "options": {}
+      },
+      "id": "193a2c4c-14e0-49ef-9f5c-3fb2cb7e2c00",
+      "name": "Indexar no Qdrant2",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [
+        2336,
+        592
+      ],
+      "credentials": {
+        "qdrantApi": {
+          "id": "asWB4et9e8kS3uk4",
+          "name": "Qdrant account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "6d692f4c-14f3-4108-a07f-be34dcac0160",
+      "name": "Gemini Embed - Indexar2",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2256,
+        768
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "4Vz28jsqf2xT8uDi",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "options": {}
+      },
+      "id": "bbf315cd-304f-4396-8857-b014d6a2d169",
+      "name": "Data Loader2",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        2384,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "chunkSize": 3000,
+        "chunkOverlap": 100,
+        "options": {}
+      },
+      "id": "383b8759-ccdb-4dbe-a8f7-f8a4977b828c",
+      "name": "Text Splitter2",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        2384,
+        928
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Recuperar Dados": {
+      "main": [
+        [
+          {
+            "node": "QA Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - OpenRouter": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "QA Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Chain": {
+      "main": [
+        [
+          {
+            "node": "Parsear JSON1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Dados1": {
+      "main": [
+        [
+          {
+            "node": "Baixar CSV1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar CSV1": {
+      "main": [
+        [
+          {
+            "node": "Gerar Chunks1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Chunks1": {
+      "main": [
+        [
+          {
+            "node": "Recuperar Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear JSON1": {
+      "main": [
+        [
+          {
+            "node": "Montar HTML1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar HTML1": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formulário de Pedido2": {
+      "main": [
+        [
+          {
+            "node": "Extrair Dados1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Embed - Buscar1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector Store Retriever": {
+      "ai_retriever": [
+        [
+          {
+            "node": "QA Chain",
+            "type": "ai_retriever",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "Vector Store Retriever",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Embed - Indexar2": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Indexar no Qdrant2",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Loader2": {
+      "ai_document": [
+        [
+          {
+            "node": "Indexar no Qdrant2",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Splitter2": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Data Loader2",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Indexar no Qdrant2": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "66f8f2fc-c8f0-46d5-8971-91bd0f5754e8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "aca0ffcb66235f8422fe11cc3c28caa7de9cfcf33c9bb2b65c76b57a68717c26"
+  },
+  "id": "S5ML6szjrO37l5Gz",
+  "tags": []
+}
